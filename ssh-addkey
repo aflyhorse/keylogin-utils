@@ -3,7 +3,7 @@
 """
 Script: ssh-addkey
 Description: Add SSH public key to user's authorized_keys file with validation
-Usage: ssh-addkey [username] [--dryrun]
+Usage: ssh-addkey [username] [--dryrun] [--stdin]
 """
 
 import os
@@ -221,6 +221,13 @@ def show_key_fingerprint(public_key, dryrun=False):
         prefix = "[DRYRUN] " if dryrun else ""
         print(f"{prefix}ssh-keygen not available, skipping fingerprint")
 
+def get_public_key_from_stdin():
+    """Read public key data from stdin"""
+    public_key = sys.stdin.read().strip()
+    if not public_key:
+        error_exit("No public key provided on stdin")
+    return public_key
+
 def get_public_key_from_user():
     """Prompt user to paste public key"""
     print("Please paste the SSH public key below:")
@@ -283,6 +290,8 @@ def main():
     parser.add_argument('username', help='Target username')
     parser.add_argument('--dryrun', action='store_true', 
                        help='Simulate operations without making changes')
+    parser.add_argument('--stdin', action='store_true',
+                       help='Read public key from stdin instead of interactive prompt')
     
     args = parser.parse_args()
     
@@ -314,8 +323,11 @@ def main():
     # Setup authorized_keys file
     setup_auth_keys_file(auth_keys_file, username, args.dryrun)
     
-    # Get public key from user
-    public_key = get_public_key_from_user()
+    # Get public key from user or stdin
+    if args.stdin:
+        public_key = get_public_key_from_stdin()
+    else:
+        public_key = get_public_key_from_user()
     
     # Validate public key
     if not validate_public_key(public_key):
