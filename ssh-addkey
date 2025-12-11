@@ -14,57 +14,61 @@ import stat
 import re
 from pathlib import Path
 
+
 def error_exit(message):
     """Display error message and exit with error code"""
     print(f"Error: {message}", file=sys.stderr)
     sys.exit(1)
 
+
 def validate_public_key(public_key):
     """Validate SSH public key format"""
     # Check if it starts with common SSH key types
     key_patterns = [
-        r'^ssh-rsa ',
-        r'^ssh-ed25519 ',
-        r'^ssh-dss ',
-        r'^ecdsa-sha2-nistp[0-9]+ '
+        r"^ssh-rsa ",
+        r"^ssh-ed25519 ",
+        r"^ssh-dss ",
+        r"^ecdsa-sha2-nistp[0-9]+ ",
     ]
-    
+
     for pattern in key_patterns:
         if re.match(pattern, public_key):
             return True
     return False
 
+
 def key_exists(key_file, new_key):
     """Check if key already exists in authorized_keys file"""
     if not os.path.isfile(key_file):
         return False
-    
+
     # Extract the key part (excluding comment) for comparison
     new_key_parts = new_key.strip().split()
     if len(new_key_parts) < 2:
         return False
-    
+
     new_key_part = f"{new_key_parts[0]} {new_key_parts[1]}"
-    
+
     try:
-        with open(key_file, 'r') as f:
+        with open(key_file, "r") as f:
             for line in f:
                 line = line.strip()
                 # Skip empty lines and comments
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
-                
+
                 existing_parts = line.split()
                 if len(existing_parts) < 2:
                     continue
-                
+
                 existing_key_part = f"{existing_parts[0]} {existing_parts[1]}"
                 if existing_key_part == new_key_part:
                     return True
     except IOError:
         pass
-    
+
     return False
+
 
 def get_user_info(username):
     """Get user details including home directory"""
@@ -73,6 +77,7 @@ def get_user_info(username):
         return user_info
     except KeyError:
         error_exit(f"User '{username}' does not exist")
+
 
 def has_write_permission_for_others(path):
     """Check if path has write permission for group or others"""
@@ -83,23 +88,25 @@ def has_write_permission_for_others(path):
     except OSError:
         return False
 
+
 def fix_permissions(path, username, desired_file_mode, desired_dir_mode, dryrun=False):
     """Fix permissions if they are too permissive"""
     try:
-        current_mode = os.stat(path).st_mode
         is_dir = os.path.isdir(path)
         desired_mode = desired_dir_mode if is_dir else desired_file_mode
-        
+
         # Check if permissions are too permissive (group or others can write)
         if has_write_permission_for_others(path):
             if dryrun:
-                print(f"[DRYRUN] Would fix permissions of {path} to {oct(desired_mode)}")
+                print(
+                    f"[DRYRUN] Would fix permissions of {path} to {oct(desired_mode)}"
+                )
                 return True
-            
+
             # Set correct ownership first
             user_info = pwd.getpwnam(username)
             os.chown(path, user_info.pw_uid, user_info.pw_gid)
-            
+
             # Then set permissions
             os.chmod(path, desired_mode)
             print(f"Fixed permissions of {path} to {oct(desired_mode)}")
@@ -113,64 +120,67 @@ def fix_permissions(path, username, desired_file_mode, desired_dir_mode, dryrun=
             error_exit(f"Failed to check/fix permissions for {path}: {e}")
         return False
 
+
 def setup_ssh_directory(ssh_dir, username, dryrun=False):
     """Create .ssh directory with secure permissions if it doesn't exist"""
     if os.path.isdir(ssh_dir):
         if dryrun:
             print(f"[DRYRUN] SSH directory exists: {ssh_dir}")
-        
+
         # Check and fix permissions if needed (group/others should not have write access)
         fix_permissions(ssh_dir, username, 0o600, 0o700, dryrun)
         return True
-    
+
     if dryrun:
         print(f"[DRYRUN] Would create SSH directory: {ssh_dir}")
         print(f"[DRYRUN] Would set ownership of {ssh_dir} to: {username}")
         print(f"[DRYRUN] Would set permissions of {ssh_dir} to: 700")
         return True
-    
+
     try:
         print(f"Creating SSH directory: {ssh_dir}")
         os.makedirs(ssh_dir, mode=0o700, exist_ok=False)
-        
+
         # Set ownership
         user_info = pwd.getpwnam(username)
         os.chown(ssh_dir, user_info.pw_uid, user_info.pw_gid)
-        
-        print(f"SSH directory created successfully")
+
+        print("SSH directory created successfully")
         return True
     except (OSError, IOError) as e:
         error_exit(f"Failed to create SSH directory: {e}")
+
 
 def setup_auth_keys_file(auth_keys_file, username, dryrun=False):
     """Create authorized_keys file with secure permissions if it doesn't exist"""
     if os.path.isfile(auth_keys_file):
         if dryrun:
             print(f"[DRYRUN] authorized_keys file exists: {auth_keys_file}")
-        
+
         # Check and fix permissions if needed (group/others should not have write access)
         fix_permissions(auth_keys_file, username, 0o600, 0o700, dryrun)
         return True
-    
+
     if dryrun:
         print(f"[DRYRUN] Would create authorized_keys file: {auth_keys_file}")
         print(f"[DRYRUN] Would set ownership of {auth_keys_file} to: {username}")
         print(f"[DRYRUN] Would set permissions of {auth_keys_file} to: 600")
         return True
-    
+
     try:
         print(f"Creating authorized_keys file: {auth_keys_file}")
         Path(auth_keys_file).touch()
-        
+
         # Set ownership and permissions
         user_info = pwd.getpwnam(username)
         os.chown(auth_keys_file, user_info.pw_uid, user_info.pw_gid)
         os.chmod(auth_keys_file, 0o600)
-        
-        print(f"authorized_keys file created successfully")
+
+        print("authorized_keys file created successfully")
         return True
     except (OSError, IOError) as e:
         error_exit(f"Failed to create authorized_keys file: {e}")
+
 
 def add_public_key(auth_keys_file, public_key, username, dryrun=False):
     """Add public key to authorized_keys file if it doesn't exist"""
@@ -181,36 +191,34 @@ def add_public_key(auth_keys_file, public_key, username, dryrun=False):
         else:
             print("No changes made.")
         return False
-    
+
     if dryrun:
         print(f"[DRYRUN] Would add public key to {auth_keys_file}")
         # Show fingerprint in dryrun mode
         show_key_fingerprint(public_key, dryrun=True)
         return True
-    
+
     try:
         print(f"Adding public key to {auth_keys_file}")
-        with open(auth_keys_file, 'a') as f:
-            f.write(public_key + '\n')
-        
+        with open(auth_keys_file, "a") as f:
+            f.write(public_key + "\n")
+
         print("Public key successfully added")
         show_key_fingerprint(public_key)
         return True
     except IOError as e:
         error_exit(f"Failed to add public key: {e}")
 
+
 def show_key_fingerprint(public_key, dryrun=False):
     """Display key fingerprint using ssh-keygen if available"""
     import subprocess
-    
+
     try:
         result = subprocess.run(
-            ['ssh-keygen', '-lf', '-'],
-            input=public_key,
-            capture_output=True,
-            text=True
+            ["ssh-keygen", "-lf", "-"], input=public_key, capture_output=True, text=True
         )
-        
+
         if result.returncode == 0:
             prefix = "[DRYRUN] " if dryrun else ""
             print(f"{prefix}Key fingerprint: {result.stdout.strip()}")
@@ -221,6 +229,7 @@ def show_key_fingerprint(public_key, dryrun=False):
         prefix = "[DRYRUN] " if dryrun else ""
         print(f"{prefix}ssh-keygen not available, skipping fingerprint")
 
+
 def get_public_key_from_stdin():
     """Read public key data from stdin"""
     public_key = sys.stdin.read().strip()
@@ -228,11 +237,12 @@ def get_public_key_from_stdin():
         error_exit("No public key provided on stdin")
     return public_key
 
+
 def get_public_key_from_user():
     """Prompt user to paste public key"""
     print("Please paste the SSH public key below:")
     print("Press Ctrl+D when finished (or enter a blank line to complete)")
-    
+
     lines = []
     try:
         while True:
@@ -246,13 +256,14 @@ def get_public_key_from_user():
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
         sys.exit(1)
-    
-    public_key = '\n'.join(lines).strip()
-    
+
+    public_key = "\n".join(lines).strip()
+
     if not public_key:
         error_exit("No public key provided")
-    
+
     return public_key
+
 
 def display_dryrun_summary(username, home_dir, ssh_dir, auth_keys_file, public_key):
     """Display summary of what would be done in dryrun mode"""
@@ -260,7 +271,7 @@ def display_dryrun_summary(username, home_dir, ssh_dir, auth_keys_file, public_k
     print("The following actions would be performed:")
     print(f"1. Target user: {username}")
     print(f"2. Target directory: {home_dir}")
-    
+
     if not os.path.isdir(ssh_dir):
         print(f"3. Create SSH directory: {ssh_dir}")
         print(f"4. Set ownership of {ssh_dir} to: {username}")
@@ -268,7 +279,7 @@ def display_dryrun_summary(username, home_dir, ssh_dir, auth_keys_file, public_k
     else:
         print(f"3. SSH directory exists: {ssh_dir}")
         print(f"4. Ensure permissions of {ssh_dir} are secure (g-w,o-w)")
-    
+
     if not os.path.isfile(auth_keys_file):
         print(f"6. Create authorized_keys file: {auth_keys_file}")
         print(f"7. Set ownership of {auth_keys_file} to: {username}")
@@ -276,73 +287,85 @@ def display_dryrun_summary(username, home_dir, ssh_dir, auth_keys_file, public_k
     else:
         print(f"6. authorized_keys file exists: {auth_keys_file}")
         print(f"7. Ensure permissions of {auth_keys_file} are secure (g-w,o-w)")
-    
+
     if public_key:
         if key_exists(auth_keys_file, public_key):
             print("9. Skip adding key (already exists)")
         else:
             print("9. Add public key to authorized_keys")
-    
+
     print("======================")
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Add SSH public key to user's authorized_keys file")
-    parser.add_argument('username', help='Target username')
-    parser.add_argument('--dryrun', action='store_true', 
-                       help='Simulate operations without making changes')
-    parser.add_argument('--stdin', action='store_true',
-                       help='Read public key from stdin instead of interactive prompt')
-    
+    parser = argparse.ArgumentParser(
+        description="Add SSH public key to user's authorized_keys file"
+    )
+    parser.add_argument("username", help="Target username")
+    parser.add_argument(
+        "--dryrun",
+        action="store_true",
+        help="Simulate operations without making changes",
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read public key from stdin instead of interactive prompt",
+    )
+
     args = parser.parse_args()
-    
+
     if args.dryrun:
         print("=== DRYRUN MODE ===")
         print("No changes will be made to the system.")
-    
+
     # Get user information
     user_info = get_user_info(args.username)
     home_dir = user_info.pw_dir
     username = args.username
-    
+
     # Verify home directory exists
     if not os.path.isdir(home_dir):
         error_exit(f"Home directory '{home_dir}' for user '{username}' does not exist")
-    
+
     # Define paths
-    ssh_dir = os.path.join(home_dir, '.ssh')
-    auth_keys_file = os.path.join(ssh_dir, 'authorized_keys')
-    
+    ssh_dir = os.path.join(home_dir, ".ssh")
+    auth_keys_file = os.path.join(ssh_dir, "authorized_keys")
+
     if args.dryrun:
         print(f"[DRYRUN] Target directory: {home_dir}")
         print(f"[DRYRUN] SSH directory: {ssh_dir}")
         print(f"[DRYRUN] Authorized keys file: {auth_keys_file}")
-    
+
     # Setup SSH directory
     setup_ssh_directory(ssh_dir, username, args.dryrun)
-    
+
     # Setup authorized_keys file
     setup_auth_keys_file(auth_keys_file, username, args.dryrun)
-    
+
     # Get public key from user or stdin
     if args.stdin:
         public_key = get_public_key_from_stdin()
     else:
         public_key = get_public_key_from_user()
-    
+
     # Validate public key
     if not validate_public_key(public_key):
-        error_exit("Invalid SSH public key format. Key should start with: ssh-rsa, ssh-ed25519, ssh-dss, or ecdsa-sha2-nistp*")
-    
+        error_exit(
+            "Invalid SSH public key format. Key should start with: ssh-rsa, ssh-ed25519, ssh-dss, or ecdsa-sha2-nistp*"
+        )
+
     # Add public key
     add_public_key(auth_keys_file, public_key, username, args.dryrun)
-    
+
     # Display dryrun summary
     if args.dryrun:
         display_dryrun_summary(username, home_dir, ssh_dir, auth_keys_file, public_key)
+
 
 if __name__ == "__main__":
     # Check if running as root (needed for chown)
     if os.geteuid() != 0:
         error_exit("This script must be run as root (use sudo)")
-    
+
     main()
