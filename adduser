@@ -3,7 +3,7 @@
 adduser - A script to add new users with extended information and SSH key setup.
 
 This script:
-1. Creates a new user with matching UID/GID and home directory
+1. Creates a new user with UID>=1000 and selectable primary group (GID>=2000)
 2. Prompts for user details (name, affiliation, email) and stores in GECOS field
 3. Optionally accepts SSH public key and saves via ssh-addkey
 4. Executes /usr/local/sbin/adduser.local if it exists
@@ -16,19 +16,26 @@ import pwd
 import grp
 
 
-def get_next_available_id(start=1000):
-    """
-    Find the next available UID/GID that is free for both user and group.
-    Starts searching from 'start' (default 1000).
-    """
+def get_next_available_uid(start=1000):
+    """Find the next available UID starting from `start` (default 1000)."""
     existing_uids = {u.pw_uid for u in pwd.getpwall()}
-    existing_gids = {g.gr_gid for g in grp.getgrall()}
 
     uid = start
-    while uid in existing_uids or uid in existing_gids:
+    while uid in existing_uids:
         uid += 1
 
     return uid
+
+
+def get_next_available_gid(start=2000):
+    """Find the next available GID starting from `start` (default 2000)."""
+    existing_gids = {g.gr_gid for g in grp.getgrall()}
+
+    gid = start
+    while gid in existing_gids:
+        gid += 1
+
+    return gid
 
 
 def user_exists(username):
@@ -40,35 +47,34 @@ def user_exists(username):
         return False
 
 
-def group_exists(groupname):
-    """Check if a group already exists."""
+def ensure_group(groupname, gid):
+    """Ensure the group exists with the given GID."""
     try:
-        grp.getgrnam(groupname)
+        existing = grp.getgrnam(groupname)
+        if existing.gr_gid != gid:
+            print(
+                f"Error: group '{groupname}' already exists with GID {existing.gr_gid}.",
+                file=sys.stderr,
+            )
+            return False
         return True
     except KeyError:
-        return False
-
-
-def create_user(username, uid, gecos):
-    """
-    Create a new user with the specified username, UID/GID, and GECOS field.
-    Creates a group with the same name and GID as the UID.
-    """
-    # Create group first with the same GID as UID
-    if not group_exists(username):
-        cmd_group = ["/usr/sbin/groupadd", "-g", str(uid), username]
+        cmd_group = ["/usr/sbin/groupadd", "-g", str(gid), groupname]
         result = subprocess.run(cmd_group, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Error creating group: {result.stderr}", file=sys.stderr)
             return False
+        return True
 
-    # Create user with matching UID and GID, and create home directory
+
+def create_user(username, uid, gid, gecos):
+    """Create a new user with the specified UID, primary GID, and GECOS."""
     cmd_user = [
         "/usr/sbin/useradd",
         "-u",
         str(uid),
         "-g",
-        str(uid),
+        str(gid),
         "-m",  # Create home directory
         "-c",
         gecos,
@@ -110,6 +116,56 @@ def prompt_user_info():
     gecos = f"{name},{affiliation},{email}"
 
     return gecos
+
+
+def get_group_display_name(group):
+    """Use the GECOS first field of a same-named user as the display label."""
+    try:
+        user = pwd.getpwnam(group.gr_name)
+        label = user.pw_gecos.split(",")[0].strip()
+        return label
+    except KeyError:
+        return ""
+
+
+def prompt_group_selection(username):
+    """List eligible groups and return selection info."""
+    groups = [g for g in grp.getgrall() if g.gr_gid >= 2000 and g.gr_gid != 65534]
+    groups.sort(key=lambda g: g.gr_gid)
+
+    if groups:
+        print("\nAvailable groups:")
+        for idx, group in enumerate(groups, start=1):
+            display_name = get_group_display_name(group)
+            suffix = f" - {display_name}" if display_name else ""
+            print(f"  {idx}. {group.gr_name}{suffix}")
+    else:
+        print("\nNo existing groups with GID>=2000 found.")
+
+    print(f"  0. Create new group named '{username}' (group lead)")
+
+    while True:
+        choice = input("Select group number: ").strip()
+        if choice == "0":
+            gid = get_next_available_gid()
+            print(f"  New group will use GID: {gid}")
+            return {"type": "new", "gid": gid, "name": username}
+
+        try:
+            idx = int(choice)
+        except ValueError:
+            print("  Please enter a number from the list.")
+            continue
+
+        if 1 <= idx <= len(groups):
+            selected = groups[idx - 1]
+            return {
+                "type": "existing",
+                "gid": selected.gr_gid,
+                "name": selected.gr_name,
+            }
+
+        print("  Invalid selection. Try again.")
 
 
 def validate_ssh_key(ssh_key):
@@ -268,16 +324,45 @@ def main():
         print(f"Error: User '{username}' already exists.", file=sys.stderr)
         sys.exit(1)
 
-    # Find next available UID/GID
-    uid = get_next_available_id()
-    print(f"Using UID/GID: {uid}")
+    # Find next available UID
+    uid = get_next_available_uid()
+    print(f"Using UID: {uid}")
+
+    # Prompt for group selection (GID>=2000)
+    group_selection = prompt_group_selection(username)
+
+    if group_selection["type"] == "new":
+        gid = group_selection["gid"]
+        if not ensure_group(group_selection["name"], gid):
+            print("Failed to prepare group.", file=sys.stderr)
+            sys.exit(1)
+        print(f"Selected group: {group_selection['name']} (GID {gid}) [new]")
+    else:
+        try:
+            existing_group = grp.getgrnam(group_selection["name"])
+        except KeyError:
+            print(
+                f"Error: Group '{group_selection['name']}' no longer exists.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        gid = existing_group.gr_gid
+        if gid < 2000 or gid == 65534:
+            print(
+                f"Error: Group '{existing_group.gr_name}' has GID {gid}, expected >=2000 and not 65534.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        print(f"Selected group: {existing_group.gr_name} (GID {gid})")
 
     # Prompt for user information
     gecos = prompt_user_info()
 
     # Create the user
     print(f"\nCreating user '{username}'...")
-    if not create_user(username, uid, gecos):
+    if not create_user(username, uid, gid, gecos):
         print("Failed to create user.", file=sys.stderr)
         sys.exit(1)
 
