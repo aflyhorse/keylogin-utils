@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""
+adduser - A script to add new users with extended information and SSH key setup.
+
+This script:
+1. Creates a new user with matching UID/GID and home directory
+2. Prompts for user details (name, affiliation, email) and stores in GECOS field
+3. Optionally accepts SSH public key and saves via ssh-addkey
+4. Executes /usr/local/sbin/adduser.local if it exists
+"""
+
+import subprocess
+import sys
+import os
+import pwd
+import grp
+
+
+def get_next_available_id(start=1000):
+    """
+    Find the next available UID/GID that is free for both user and group.
+    Starts searching from 'start' (default 1000).
+    """
+    existing_uids = {u.pw_uid for u in pwd.getpwall()}
+    existing_gids = {g.gr_gid for g in grp.getgrall()}
+
+    uid = start
+    while uid in existing_uids or uid in existing_gids:
+        uid += 1
+
+    return uid
+
+
+def user_exists(username):
+    """Check if a user already exists."""
+    try:
+        pwd.getpwnam(username)
+        return True
+    except KeyError:
+        return False
+
+
+def group_exists(groupname):
+    """Check if a group already exists."""
+    try:
+        grp.getgrnam(groupname)
+        return True
+    except KeyError:
+        return False
+
+
+def create_user(username, uid, gecos):
+    """
+    Create a new user with the specified username, UID/GID, and GECOS field.
+    Creates a group with the same name and GID as the UID.
+    """
+    # Create group first with the same GID as UID
+    if not group_exists(username):
+        cmd_group = ["/usr/sbin/groupadd", "-g", str(uid), username]
+        result = subprocess.run(cmd_group, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error creating group: {result.stderr}", file=sys.stderr)
+            return False
+
+    # Create user with matching UID and GID, and create home directory
+    cmd_user = [
+        "/usr/sbin/useradd",
+        "-u",
+        str(uid),
+        "-g",
+        str(uid),
+        "-m",  # Create home directory
+        "-c",
+        gecos,
+        "-s",
+        "/bin/bash",
+        username,
+    ]
+
+    result = subprocess.run(cmd_user, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error creating user: {result.stderr}", file=sys.stderr)
+        return False
+
+    return True
+
+
+def update_gecos(username, gecos):
+    """
+    Update the GECOS field for an existing user using chfn or usermod.
+    """
+    cmd = ["/usr/sbin/usermod", "-c", gecos, username]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def prompt_user_info():
+    """
+    Prompt the user for name, affiliation, and email.
+    Returns a formatted GECOS string.
+    """
+    print("\nPlease enter user information:")
+
+    name = input("  Full name: ").strip()
+    affiliation = input("  Affiliation (e.g., 'student of Yi Mao'): ").strip()
+    email = input("  Email address: ").strip()
+
+    # Format GECOS field: name,affiliation,email
+    # GECOS traditionally uses comma as separator
+    gecos = f"{name},{affiliation},{email}"
+
+    return gecos
+
+
+def validate_ssh_key(ssh_key):
+    """
+    Validate SSH public key using ssh-keygen.
+    Returns (is_valid, fingerprint) tuple.
+    """
+    try:
+        result = subprocess.run(
+            ["ssh-keygen", "-l", "-f", "-"],
+            input=ssh_key,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            # Output format: "2048 SHA256:xxx comment (RSA)"
+            fingerprint = result.stdout.strip()
+            return True, fingerprint
+        else:
+            return False, result.stderr.strip()
+    except FileNotFoundError:
+        # ssh-keygen not found, skip validation
+        return True, "ssh-keygen not found, validation skipped"
+
+
+def prompt_ssh_key():
+    """
+    Prompt for SSH public key. Supports multi-line input.
+    Returns None if user skips (empty input).
+    Use empty line (double Enter) or Ctrl+D (EOF) to finish input.
+    """
+    print("\nEnter SSH public key (press Enter to skip):")
+    print("  (For multi-line input, press Enter twice or Ctrl+D to finish)")
+    print("  SSH public key: ", end="", flush=True)
+
+    lines = []
+    try:
+        while True:
+            line = input()
+            if not line:
+                # Empty line signals end of input
+                break
+            lines.append(line)
+    except EOFError:
+        # Ctrl+D pressed
+        print()  # Print newline after EOF
+
+    if not lines:
+        return None
+
+    # Join lines and normalize (SSH keys should be single line)
+    # Remove any line breaks that were added by copy-paste wrapping
+    ssh_key = "".join(lines).strip()
+
+    # Handle case where key was split across lines but is actually one key
+    # SSH public keys have format: type base64-data comment
+    # If it looks fragmented, try to reconstruct
+    if ssh_key:
+        # Validate the key
+        is_valid, result = validate_ssh_key(ssh_key)
+        if is_valid:
+            print(f"  Key fingerprint: {result}")
+            return ssh_key
+        else:
+            print(f"  Warning: Invalid SSH key format: {result}", file=sys.stderr)
+            retry = input("  Do you want to retry? [y/N]: ").strip().lower()
+            if retry == "y":
+                return prompt_ssh_key()
+            else:
+                return None
+
+    return None
+
+
+def save_ssh_key(username, ssh_key):
+    """
+    Save SSH public key using /usr/local/sbin/ssh-addkey via stdin.
+    """
+    ssh_addkey_path = "/usr/local/sbin/ssh-addkey"
+
+    if not os.path.exists(ssh_addkey_path):
+        print(
+            f"Warning: {ssh_addkey_path} not found, skipping SSH key setup.",
+            file=sys.stderr,
+        )
+        return False
+
+    cmd = [ssh_addkey_path, username, "--stdin"]
+
+    result = subprocess.run(cmd, input=ssh_key, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"Error saving SSH key: {result.stderr}", file=sys.stderr)
+        return False
+
+    print("SSH public key saved successfully.")
+    return True
+
+
+def run_adduser_local(username):
+    """
+    Execute /usr/local/sbin/adduser.local with username as argument if it exists.
+    """
+    adduser_local_path = "/usr/local/sbin/adduser.local"
+
+    if not os.path.exists(adduser_local_path):
+        return True  # Not an error if it doesn't exist
+
+    if not os.access(adduser_local_path, os.X_OK):
+        print(
+            f"Warning: {adduser_local_path} exists but is not executable.",
+            file=sys.stderr,
+        )
+        return False
+
+    print(f"Running {adduser_local_path}...")
+
+    result = subprocess.run(
+        [adduser_local_path, username], capture_output=True, text=True
+    )
+
+    if result.returncode != 0:
+        print(f"Error running adduser.local: {result.stderr}", file=sys.stderr)
+        return False
+
+    if result.stdout:
+        print(result.stdout)
+
+    return True
+
+
+def main():
+    # Check if running as root
+    if os.geteuid() != 0:
+        print("Error: This script must be run as root.", file=sys.stderr)
+        sys.exit(1)
+
+    # Get username from command line argument
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <username>", file=sys.stderr)
+        sys.exit(1)
+
+    username = sys.argv[1]
+
+    # Validate username (basic validation)
+    if not username.isalnum() and not all(c.isalnum() or c in "-_" for c in username):
+        print(
+            "Error: Invalid username. Use only alphanumeric characters, "
+            "hyphens, and underscores.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Check if user already exists
+    if user_exists(username):
+        print(f"Error: User '{username}' already exists.", file=sys.stderr)
+        sys.exit(1)
+
+    # Find next available UID/GID
+    uid = get_next_available_id()
+    print(f"Using UID/GID: {uid}")
+
+    # Prompt for user information
+    gecos = prompt_user_info()
+
+    # Create the user
+    print(f"\nCreating user '{username}'...")
+    if not create_user(username, uid, gecos):
+        print("Failed to create user.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"User '{username}' created successfully.")
+
+    # Prompt for SSH key
+    ssh_key = prompt_ssh_key()
+    if ssh_key:
+        save_ssh_key(username, ssh_key)
+    else:
+        print("No SSH key provided, skipping.")
+
+    # Run adduser.local if it exists
+    run_adduser_local(username)
+
+    print(f"\nUser '{username}' has been set up successfully.")
+
+    # Display the created user's /etc/passwd entry
+    try:
+        user_info = pwd.getpwnam(username)
+        print("\n/etc/passwd entry:")
+        print(
+            f"  {user_info.pw_name}:x:{user_info.pw_uid}:{user_info.pw_gid}:"
+            f"{user_info.pw_gecos}:{user_info.pw_dir}:{user_info.pw_shell}"
+        )
+    except KeyError:
+        pass
+
+
+if __name__ == "__main__":
+    main()
