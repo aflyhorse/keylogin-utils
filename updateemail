@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""
+updateemail - Update a user's email stored in the GECOS field.
+
+Usage: sudo ./updateemail <username>
+
+The script reads the user's GECOS (expected format: "Full Name,Affiliation,Email"),
+displays the current email, prompts for a new email (Enter to skip), and
+updates the GECOS via `usermod -c` if changed.
+"""
+
+import sys
+import os
+import pwd
+import subprocess
+
+
+def main():
+    if os.geteuid() != 0:
+        print("Error: this script must be run as root.", file=sys.stderr)
+        sys.exit(1)
+
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <username>")
+        sys.exit(1)
+
+    username = sys.argv[1]
+
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        print(f"Error: user '{username}' not found.")
+        sys.exit(1)
+
+    gecos = pw.pw_gecos or ""
+    # Split into at most 3 parts: name, affiliation, email
+    parts = gecos.split(",", 2)
+    name = parts[0] if len(parts) > 0 else ""
+    affiliation = parts[1] if len(parts) > 1 else ""
+    current_email = parts[2] if len(parts) > 2 else ""
+
+    print(f"Full name: {name}")
+    print(f"Affiliation: {affiliation}")
+    print(f"Current email: {current_email or '<none>'}")
+
+    new_email = input("Enter new email (press Enter to keep current): ").strip()
+    if not new_email:
+        print("No changes made.")
+        sys.exit(0)
+
+    # Reconstruct GECOS preserving name and affiliation
+    new_gecos = f"{name},{affiliation},{new_email}"
+
+    cmd = ["/usr/sbin/usermod", "-c", new_gecos, username]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Failed to update GECOS: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+    print("Email updated successfully.")
+    # Show updated /etc/passwd line
+    try:
+        pw2 = pwd.getpwnam(username)
+        print(
+            f"/etc/passwd entry: {pw2.pw_name}:x:{pw2.pw_uid}:{pw2.pw_gid}:{pw2.pw_gecos}:{pw2.pw_dir}:{pw2.pw_shell}"
+        )
+    except KeyError:
+        pass
+
+
+if __name__ == "__main__":
+    main()
