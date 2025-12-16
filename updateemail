@@ -20,8 +20,8 @@ def main():
         print("Error: this script must be run as root.", file=sys.stderr)
         sys.exit(1)
 
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <username>")
+    if len(sys.argv) not in (2, 3):
+        print(f"Usage: {sys.argv[0]} <username> [newemail]")
         sys.exit(1)
 
     username = sys.argv[1]
@@ -43,10 +43,17 @@ def main():
     print(f"Affiliation: {affiliation}")
     print(f"Current email: {current_email or '<none>'}")
 
-    new_email = input("Enter new email (press Enter to keep current): ").strip()
-    if not new_email:
-        print("No changes made.")
-        sys.exit(0)
+    # Support non-interactive mode: updateemail username newemailaddr
+    if len(sys.argv) == 3:
+        new_email = sys.argv[2].strip()
+        if not new_email:
+            print("No changes made (empty new email).")
+            sys.exit(0)
+    else:
+        new_email = input("Enter new email (press Enter to keep current): ").strip()
+        if not new_email:
+            print("No changes made.")
+            sys.exit(0)
 
     # Reconstruct GECOS preserving name and affiliation
     new_gecos = f"{name},{affiliation},{new_email}"
