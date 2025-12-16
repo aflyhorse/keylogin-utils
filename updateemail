@@ -13,6 +13,7 @@ import sys
 import os
 import pwd
 import subprocess
+import argparse
 
 
 def main():
@@ -20,11 +21,15 @@ def main():
         print("Error: this script must be run as root.", file=sys.stderr)
         sys.exit(1)
 
-    if len(sys.argv) not in (2, 3):
-        print(f"Usage: {sys.argv[0]} <username> [newemail]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description="Update a user's email stored in the GECOS field.",
+    )
+    parser.add_argument("username", help="target username")
+    parser.add_argument("new_email", nargs="?", help="new email address (optional)")
+    args = parser.parse_args()
 
-    username = sys.argv[1]
+    username = args.username
 
     try:
         pw = pwd.getpwnam(username)
