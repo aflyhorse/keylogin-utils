@@ -70,6 +70,17 @@ def key_exists(key_file, new_key):
     return False
 
 
+def get_user_email_from_gecos(gecos):
+    """Extract email from GECOS field (third comma-separated field: name, affiliation, email)"""
+    if not gecos:
+        return None
+    parts = gecos.split(",")
+    if len(parts) >= 3:  # name, affiliation, email
+        email = parts[2].strip()
+        return email if email else None
+    return None
+
+
 def get_user_info(username):
     """Get user details including home directory"""
     try:
@@ -323,6 +334,11 @@ def main():
     user_info = get_user_info(args.username)
     home_dir = user_info.pw_dir
     username = args.username
+
+    # Print user's email from GECOS if available
+    user_email = get_user_email_from_gecos(user_info.pw_gecos)
+    if user_email:
+        print(f"User email: {user_email}")
 
     # Verify home directory exists
     if not os.path.isdir(home_dir):
